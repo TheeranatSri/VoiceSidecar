@@ -1,0 +1,63 @@
+name: Build VoiceSidecar for M1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'build.sh'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'build.sh'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      ARCH: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Apple Silicon and Xcode
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk macosx swiftc --version
+          xcrun --sdk macosx --show-sdk-path
+      - name: Build app for macOS 13 and newer
+        run: bash build.sh
+      - name: Verify bundle, architecture, deployment target and signature
+        run: |
+          set -euo pipefail
+          APP=dist/VoiceSidecar.app
+          BIN="$APP/Contents/MacOS/VoiceSidecar"
+          plutil -lint "$APP/Contents/Info.plist"
+          test "$(lipo -archs "$BIN")" = arm64
+          file "$BIN"
+          xcrun vtool -show-build "$BIN"
+          xcrun vtool -show-build "$BIN" | awk '$1 == "minos" { found=1; if ($2 != "13.0") exit 1 } END { if (!found) exit 1 }'
+          codesign --verify --strict --verbose=2 "$APP"
+      - name: Package app
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/VoiceSidecar.app dist/VoiceSidecar-M1.zip
+          cd dist
+          shasum -a 256 VoiceSidecar-M1.zip > VoiceSidecar-M1.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoiceSidecar-M1
+          path: |
+            dist/VoiceSidecar-M1.zip
+            dist/VoiceSidecar-M1.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
